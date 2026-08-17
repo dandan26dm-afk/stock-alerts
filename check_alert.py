@@ -14,7 +14,23 @@ import sys
 import json
 import requests
 import yfinance as yf
-from datetime import datetime, timezone
+
+
+def format_alert_message(symbol: str, reason: str, value: float) -> str:
+    """
+    בונה את הודעת הדיסקורד במבנה קבוע ואחיד:
+
+    🚨 התראת מניה 🚨
+    שם המנייה: [SYMBOL]
+    סיבת ההתראה: [REASON]
+    ערך יעד / מחיר: [VALUE]$
+    """
+    return (
+        f"🚨 התראת מניה 🚨\n"
+        f"שם המנייה: {symbol}\n"
+        f"סיבת ההתראה: {reason}\n"
+        f"ערך יעד / מחיר: {value:,.2f}$"
+    )
 
 
 def send_discord_alert(webhook_url: str, message: str) -> bool:
@@ -51,17 +67,22 @@ def check_one(symbol: str, condition: dict, webhook_url: str) -> None:
     current_price = float(hist["Close"].iloc[-1])
     ctype = condition.get("type")
     met = False
-    description = ""
+    # reason: תיאור מילולי לשדה "סיבת ההתראה"
+    # alert_value: המספר שיוצג בשדה "ערך יעד / מחיר" (תמיד מחיר ב-$)
+    reason = ""
+    alert_value = 0.0
 
     if ctype == "price_above":
         target = float(condition["value"])
         met = current_price > target
-        description = f"{symbol}: מחיר נוכחי ${current_price:,.2f} מעל היעד ${target:,.2f}"
+        reason = f"המחיר הנוכחי (${current_price:,.2f}) עלה מעל מחיר היעד שהוגדר"
+        alert_value = target
 
     elif ctype == "price_below":
         target = float(condition["value"])
         met = current_price < target
-        description = f"{symbol}: מחיר נוכחי ${current_price:,.2f} מתחת ליעד ${target:,.2f}"
+        reason = f"המחיר הנוכחי (${current_price:,.2f}) ירד מתחת למחיר היעד שהוגדר"
+        alert_value = target
 
     elif ctype in ("ma_cross_above", "ma_cross_below"):
         window = int(condition.get("window", 50))
@@ -69,27 +90,21 @@ def check_one(symbol: str, condition: dict, webhook_url: str) -> None:
             print(f"[{symbol}] אין מספיק נתונים לחישוב ממוצע נע של {window} ימים - מדלג.")
             return
         ma_value = float(hist["Close"].rolling(window=window).mean().iloc[-1])
+        alert_value = ma_value
         if ctype == "ma_cross_above":
             met = current_price > ma_value
-            description = (
-                f"{symbol}: מחיר ${current_price:,.2f} מעל הממוצע הנע "
-                f"({window} ימים) של ${ma_value:,.2f}"
-            )
+            reason = f"המחיר הנוכחי (${current_price:,.2f}) חצה מעל הממוצע הנע ל-{window} ימים"
         else:
             met = current_price < ma_value
-            description = (
-                f"{symbol}: מחיר ${current_price:,.2f} מתחת לממוצע הנע "
-                f"({window} ימים) של ${ma_value:,.2f}"
-            )
+            reason = f"המחיר הנוכחי (${current_price:,.2f}) חצה מתחת לממוצע הנע ל-{window} ימים"
     else:
         print(f"[{symbol}] סוג תנאי לא מוכר: {ctype}")
         return
 
-    print(f"[{symbol}] {description} | תנאי מתקיים: {met}")
+    print(f"[{symbol}] {reason} | ערך: {alert_value:,.2f} | תנאי מתקיים: {met}")
 
     if met:
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        message = f"🚨 **התראת מניה** 🚨\n{description}\n🕒 {timestamp}"
+        message = format_alert_message(symbol, reason, alert_value)
         send_discord_alert(webhook_url, message)
 
 

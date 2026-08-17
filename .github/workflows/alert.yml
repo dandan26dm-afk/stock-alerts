@@ -1,0 +1,35 @@
+name: Stock Alert Check
+
+on:
+  schedule:
+    # רץ כל 15 דקות. שימו לב: GitHub Actions לא מבטיח דיוק מדויק בזמן,
+    # וב-cron ציבורי לעיתים יש עיכוב של כמה דקות בזמני עומס.
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}   # מאפשר גם הרצה ידנית מהטאב Actions בגיטהאב
+
+jobs:
+  check-stock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run stock alert check
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # אפשרות א' - מניה אחת פשוטה:
+          SYMBOL: ${{ vars.SYMBOL }}
+          CONDITION_TYPE: ${{ vars.CONDITION_TYPE }}
+          CONDITION_VALUE: ${{ vars.CONDITION_VALUE }}
+          MA_WINDOW: ${{ vars.MA_WINDOW }}
+          # אפשרות ב' - כמה מניות בבת אחת (JSON), ראו README:
+          WATCHLIST: ${{ vars.WATCHLIST }}
+        run: python check_alert.py

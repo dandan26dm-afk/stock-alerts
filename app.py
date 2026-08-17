@@ -81,6 +81,23 @@ with st.sidebar:
 
 # --- פונקציות עזר: מניות ודיסקורד -------------------------------------------
 
+def format_alert_message(symbol: str, reason: str, value: float) -> str:
+    """
+    בונה את הודעת הדיסקורד במבנה קבוע ואחיד (זהה ל-check_alert.py):
+
+    🚨 התראת מניה 🚨
+    שם המנייה: [SYMBOL]
+    סיבת ההתראה: [REASON]
+    ערך יעד / מחיר: [VALUE]$
+    """
+    return (
+        f"🚨 התראת מניה 🚨\n"
+        f"שם המנייה: {symbol}\n"
+        f"סיבת ההתראה: {reason}\n"
+        f"ערך יעד / מחיר: {value:,.2f}$"
+    )
+
+
 def send_discord_alert(webhook_url: str, message: str) -> tuple[bool, str]:
     """שולח הודעה לדיסקורד דרך Webhook. מחזיר (הצלחה, טקסט_תגובה)."""
     if not webhook_url:
@@ -117,14 +134,18 @@ PRICE_CONDITIONS = ("price_above", "price_below")
 MA_CONDITIONS = ("ma_cross_above", "ma_cross_below")
 
 
-def evaluate_condition(symbol: str, condition: dict) -> tuple[bool | None, str]:
+def evaluate_condition(symbol: str, condition: dict) -> tuple[bool | None, str, str, float]:
     """
     בודק תנאי מול נתונים חיים מ-yfinance.
-    מחזיר (met, description). met=None אומר שהבדיקה נכשלה (למשל אין נתונים).
+    מחזיר (met, description, reason, alert_value):
+      - met: True/False אם התנאי התקיים, None אם הבדיקה נכשלה (למשל אין נתונים).
+      - description: תיאור מלא להצגה במסך (כולל "מעל/מתחת" תיאורי).
+      - reason: הטקסט שייכנס לשדה "סיבת ההתראה" בהודעת הדיסקורד.
+      - alert_value: המספר שייכנס לשדה "ערך יעד / מחיר" בהודעת הדיסקורד.
     """
     data = get_stock_data(symbol)
     if data is None:
-        return None, f"{symbol}: לא נמצאו נתונים עבור הסימול הזה."
+        return None, f"{symbol}: לא נמצאו נתונים עבור הסימול הזה.", "", 0.0
 
     current_price = float(data["Close"].iloc[-1])
     ctype = condition.get("type")
@@ -133,28 +154,32 @@ def evaluate_condition(symbol: str, condition: dict) -> tuple[bool | None, str]:
         target = float(condition["value"])
         met = current_price > target
         desc = f"{symbol}: מחיר נוכחי ${current_price:,.2f}, {'מעל' if met else 'עדיין לא מעל'} היעד ${target:,.2f}"
-        return met, desc
+        reason = f"המחיר הנוכחי (${current_price:,.2f}) עלה מעל מחיר היעד שהוגדר"
+        return met, desc, reason, target
 
     if ctype == "price_below":
         target = float(condition["value"])
         met = current_price < target
         desc = f"{symbol}: מחיר נוכחי ${current_price:,.2f}, {'מתחת' if met else 'עדיין לא מתחת'} ליעד ${target:,.2f}"
-        return met, desc
+        reason = f"המחיר הנוכחי (${current_price:,.2f}) ירד מתחת למחיר היעד שהוגדר"
+        return met, desc, reason, target
 
     if ctype in MA_CONDITIONS:
         window = int(condition.get("window", 50))
         if len(data) < window:
-            return None, f"{symbol}: אין מספיק נתונים לחישוב ממוצע נע של {window} ימים."
+            return None, f"{symbol}: אין מספיק נתונים לחישוב ממוצע נע של {window} ימים.", "", 0.0
         ma_value = float(data["Close"].rolling(window=window).mean().iloc[-1])
         if ctype == "ma_cross_above":
             met = current_price > ma_value
             desc = f"{symbol}: מחיר ${current_price:,.2f} {'מעל' if met else 'לא מעל'} הממוצע הנע ({window} ימים) של ${ma_value:,.2f}"
+            reason = f"המחיר הנוכחי (${current_price:,.2f}) חצה מעל הממוצע הנע ל-{window} ימים"
         else:
             met = current_price < ma_value
             desc = f"{symbol}: מחיר ${current_price:,.2f} {'מתחת' if met else 'לא מתחת'} לממוצע הנע ({window} ימים) של ${ma_value:,.2f}"
-        return met, desc
+            reason = f"המחיר הנוכחי (${current_price:,.2f}) חצה מתחת לממוצע הנע ל-{window} ימים"
+        return met, desc, reason, ma_value
 
-    return None, f"{symbol}: סוג תנאי לא מוכר ({ctype})."
+    return None, f"{symbol}: סוג תנאי לא מוכר ({ctype}).", "", 0.0
 
 
 def condition_to_text(condition: dict) -> str:
@@ -170,13 +195,12 @@ def run_check_and_log(alert: dict, send_if_met: bool = True) -> dict:
     """מריץ בדיקה עבור התראה בודדת, שולח לדיסקורד אם צריך, ומחזיר רשומת לוג."""
     symbol = alert["symbol"]
     condition = alert["condition"]
-    met, description = evaluate_condition(symbol, condition)
+    met, description, reason, alert_value = evaluate_condition(symbol, condition)
 
     alert_sent = False
     send_info = ""
     if met and send_if_met:
-        timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        message = f"🚨 **התראת מניה** 🚨\n{description}\n🕒 {timestamp_str}"
+        message = format_alert_message(symbol, reason, alert_value)
         ok, info = send_discord_alert(webhook_url, message)
         alert_sent = ok
         send_info = info
